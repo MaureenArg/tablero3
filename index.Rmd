@@ -1,0 +1,236 @@
+---
+title: "Denuncias Ambientales en Costa Rica"
+output: 
+  flexdashboard::flex_dashboard:
+  orientation: rows
+runtime: shiny 
+  
+---
+  
+```{r setup, include=FALSE}
+library(flexdashboard)
+```
+
+```{r paquetes, warning=FALSE, message=FALSE}
+library(dplyr)
+library(sf)
+library(terra)
+library(raster)
+library(rgdal)
+library(DT)
+library(plotly)
+library(leaflet)
+library(leafem)
+library(leaflet.extras)
+library(shiny)
+library (ggplot2)
+library (plotly)
+```
+
+
+```{r datos, warning=FALSE, message=FALSE}
+
+# capa vectorial (GeoJSON) de provincias de Costa Rica
+provincias <-
+  st_read(
+    "https://github.com/tpb728O-programaciongeoespacialr/2021ii/raw/main/datos/ign/delimitacion-territorial-administrativa/provincias.geojson",
+    quiet = TRUE
+  )
+# Transformación del CRS  provincias
+provincias <-
+  provincias %>%
+  st_transform (4326)
+
+```
+
+```{r warning=FALSE, message=FALSE}
+# archivo CSV con registros de denuncias
+denu_depu <-
+  st_read(
+    "/vsicurl/https://raw.githubusercontent.com/MaureenArg/datostarea/master/denucdepu.csv",
+    options = c(
+      "X_POSSIBLE_NAMES=decimalLon",
+      "Y_POSSIBLE_NAMES=decimalLat"
+    ),
+    quiet = TRUE
+  )
+
+# Asignación de un CRS a capa denuncias
+st_crs (denu_depu) <- 4326
+
+```
+
+```{r}
+altitud <-
+  rast(
+    "/vsicurl/https://raw.githubusercontent.com/tpb728O-programaciongeoespacialr/2021ii/master/datos/worldclim/altitud.tif"
+  )
+```
+
+```{r}
+denuncias2021 <-
+read.csv (
+  file= "https://raw.githubusercontent.com/MaureenArg/datostarea/master/denunciasoct23.csv", 
+ sep = ";"
+    )
+```
+
+```{r}
+asp <-
+  st_read(
+    "https://raw.githubusercontent.com/tpb728O-programaciongeoespacialr/2021ii/main/datos/sinac/areas-silvestres-protegidas-simplificadas_100m.geojson",
+    quiet = TRUE
+  )
+```
+
+```{r}
+red_vial <-
+  st_read(
+    "https://raw.githubusercontent.com/tpb728O-programaciongeoespacialr/2021ii/main/datos/ign/infraestructura/redvial-simplificadas_500m.geojson",
+    quiet = TRUE
+  )
+```
+
+```{r}
+rios <-
+  st_read(
+    "https://raw.githubusercontent.com/MaureenArg/datostarea/master/rios.geojson",
+    quiet = TRUE
+  )
+```
+
+
+```{r warning=FALSE, message=FALSE}
+# Lista ordenada de denuncias + "Todas"
+lista_denuncias <- unique(denu_depu$TIPO_den)
+lista_denuncias <- sort(lista_denuncias)
+lista_denuncias <- c("Todas", lista_denuncias)
+
+# Lista ordenada de provincias + "Todas"
+lista_provincias <- unique(denu_depu$Provincia)
+lista_provincias <- sort(lista_provincias)
+lista_provincias <- c("Todas", lista_provincias)
+```
+
+# Información general 
+
+Column {.sidebar}
+-----------------------------------------------------------------------
+ 
+```{r filtros}
+
+h3 ("Filtros")
+
+
+selectInput(
+  inputId = "denuncias",
+  label = "Tipo denuncia",
+  choices = lista_denuncias,
+  selected = "Todas"
+)
+selectInput(
+  inputId = "provincia",
+  label = "Provincia",
+  choices = lista_provincias,
+  selected = "Todas"
+)
+
+filtrarRegistros <- reactive({
+  # Remoción de geometrías y selección de columnas
+  denuncias_filtrado <-
+    denu_depu %>%
+    dplyr::select(TIPO_den, TIPO_inf, año, Provincia)
+  
+  # Filtrado de denuncias por tipo
+  if (input$denuncias != "Todas") {
+    denuncias_filtrado <-
+      denuncias_filtrado %>%
+      filter(TIPO_den == input$denuncias)
+  }
+  
+  # Filtrado de denuncias por provincia
+  if (input$provincia != "Todas") {
+    denuncias_filtrado <-
+      denuncias_filtrado %>%
+      filter(Provincia == input$provincia)
+  }
+  
+  
+  
+  return (denuncias_filtrado)
+})
+```
+ 
+ 
+ 
+ 
+
+Row {data-width=600}
+-----------------------------------------------------------------------
+  
+### Mapa de distribución de denuncias ambientales en Costa Rica (2018-2019)
+  
+```{r mapa, warning=FALSE}
+renderLeaflet({
+  registros <-
+    filtrarRegistros()
+  # Conversión del capa altitud a la clase RasterLayer
+  altitud_rl <- raster::raster(altitud)
+  # Mapa Leaflet con capas de provincias y denuncias
+  leaflet() %>%
+    setView(lng = -84.19452,
+            lat = 9.572735,
+            zoom = 7) %>%
+    addTiles(group = "OSM") %>%
+    addProviderTiles("Esri", group = "Esri") %>%
+    addRasterImage(altitud_rl,group = "Altitud",
+                   opacity = 0.6) %>%
+    # Overlay groups
+    addPolygons(
+      data = provincias,
+      group= "Provincias",
+      color = "red",
+      fillColor = "grey",
+      stroke = TRUE, 
+      weight = 1.0,
+    ) %>%
+    addCircleMarkers(
+      data = registros, group = "Denuncias Ambientales" , 
+      stroke = TRUE,
+      radius = 4,
+      fillColor = 'red',
+      fillOpacity = 1,
+      label = paste0(
+        registros$denuncias,
+        ", ",
+        registros$Provincia
+        
+      ),
+      popup = paste0(
+        "<strong> Detalle de la Denuncia: </strong>",
+        "<em>",
+        "<br>",
+        registros$TIPO_inf,
+        "</em>",
+        "<br>",
+        "<strong> Tipo de Denuncia: </strong>",
+        "<em>",
+        "<br>",
+        registros$TIPO_den,
+        "</em>",
+        "<br>",
+        "<strong>Provincia: </strong>",
+        registros$Provincia,
+        "<br>"
+        
+      )
+    ) %>%
+    addSearchOSM() %>%
+    addResetMapButton() %>%
+    addMouseCoordinates () %>%
+    addLayersControl(baseGroups = c ("OSM", "Esri", "Altitud"), overlayGroups = c ("Provincias", "Denuncias Ambientales"), options = layersControlOptions(collapsed = TRUE))%>%
+    addScaleBar("bottomright")  
+}) 
+```
+
+  
